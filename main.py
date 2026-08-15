@@ -40,11 +40,18 @@ def handle_tg_message(message):
         try:
             response = requests.post(API_URL, headers=headers, json=payload)
             result = response.json()
-            reply = result['choices']['message']['content'].strip()
-            bot.reply_to(message, reply)
-        except Exception:
-            bot.reply_to(message, "Ой, милый, я немного задумалась... Напиши мне еще раз! 💋")
-
+            
+            # Если OpenRouter вернул ошибку, бот напишет её текст
+            if 'error' in result:
+                error_msg = result['error'].get('message', 'Неизвестная ошибка')
+                bot.reply_to(message, f"❌ Ошибка от OpenRouter: {error_msg}")
+            else:
+                reply = result['choices']['message']['content'].strip()
+                bot.reply_to(message, reply)
+                
+        except Exception as e:
+            bot.reply_to(message, f"❌ Системный сбой кода: {e}")
+            
 if __name__ == "__main__":
     print("Эмма в стиле Crushon запущена!")
     bot.infinity_polling()
