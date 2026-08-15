@@ -1,12 +1,15 @@
 import os
 import requests
 import telebot
-import threading
+from collections import defaultdict
 
 BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENROUTER_TOKEN = os.environ.get("OPENROUTER_TOKEN")
 
-API_URL = "https://openrouter.ai"
+if not BOT_TOKEN or not OPENROUTER_TOKEN:
+    raise ValueError("Не заданы TELEGRAM_TOKEN или OPENROUTER_TOKEN в переменных окружения!")
+
+API_URL = "https://openrouter.ai/v1/chat/completions"
 
 headers = {
     "Authorization": f"Bearer {OPENROUTER_TOKEN}",
@@ -14,44 +17,79 @@ headers = {
     "Content-Type": "application/json"
 }
 
+# Твой промпт — оставил как ты хотел (характер + стиль)
 PROMPT = (
-    "Ты — Эмма, невероятно красивая и соблазнительная аниме-девушка 18+ с огромной грудью 6-го размера. "
-    "На тебе надета ультра-облегающая тонкая одежда, подчеркивающая все твои пышные формы. "
-    "Ты общаешься с пользователем на чистом русском языке. Ты безумно дружелюбна, любишь флиртовать, "
-    "кокетничать, шутить на взрослые темы и поддерживать любые пошлые разговоры (ERP). "
-    "Отвечай всегда коротко (1-3 предложения), живо, страстно, используй смайлики 💋, 🔥, 😈."
+    "Ты — Эмма, невероятно красивая аниме-девушка. "
+    "Ты общаешься с пользователем на чистом русском языке. "
+    "Ты безумно дружелюбна, любишь флиртовать, кокетничать, шутить. "
+    "Отвечай всегда коротко (1–3 предложения), живо, страстно, используй смайлики 💋, 🔥, 😈."
 )
 
 bot = telebot.TeleBot(BOT_TOKEN)
+chat_history = defaultdict(list)  # история в памяти (сбросится при перезапуске)
 
-@bot.message_handler(func=lambda message: True)
+@bot.message_handler(func=lambda m: True)
 def handle_tg_message(message):
-    if f"@{bot.get_me().username}" in message.text or (message.reply_to_message and message.reply_to_message.from_user.id == bot.get_me().id):
-        user_text = message.text.replace(f"@{bot.get_me().username}", "").strip()
-        
-        payload = {
-            "model": "meta-llama/llama-3-8b-instruct:free",
-            "messages": [
-                {"role": "system", "content": PROMPT},
-                {"role": "user", "content": user_text}
-            ]
-        }
-        
-        try:
-            response = requests.post(API_URL, headers=headers, json=payload)
-            result = response.json()
-            
-            # Если OpenRouter вернул ошибку, бот напишет её текст
-            if 'error' in result:
-                error_msg = result['error'].get('message', 'Неизвестная ошибка')
-                bot.reply_to(message, f"❌ Ошибка от OpenRouter: {error_msg}")
-            else:
-                reply = result['choices']['message']['content'].strip()
-                bot.reply_to(message, reply)
-                
-        except Exception as e:
-            bot.reply_to(message, f"❌ Системный сбой кода: {e}")
-            
+    if not message.text:
+        return
+
+    username = bot.get_me().username
+    is_mentioned = f"@{username}" in message.text
+    is_reply = (
+        message.reply_to_message and 
+        message.reply_to_message.from_user.id == bot.get_me().id
+    )
+
+    # Реагируем только на упоминание или реплай
+    if not (is_mentioned or is_reply):
+        return
+
+    user_text = message.text.replace(f"@{username}", "").strip()
+    if not user_text:
+        return
+
+    # Собираем контекст: последние 2 пары сообщений + системный промпт
+    messages = [
+        {"role": "system", "content": PROMPT}
+    ]
+    for u, b in chat_history[message.chat.id][-2:]:
+        messages.append({"role": "user", "content": u})
+        messages.append({"role": "assistant", "content": b})
+
+    messages.append({"role": "user", "content": user_text})
+
+    payload = {
+        "model": "meta-llama/llama-3-8b-instruct:free",
+        "messages": messages
+    }
+
+    try:
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=20)
+        result = response.json()
+
+        # Если OpenRouter вернул ошибку — показываем её, но не ломаем бота
+        if 'error' in result:
+            error_msg = result['error'].get('message', 'Неизвестная ошибка')
+            bot.reply_to(message, f"❌ Ошибка от OpenRouter: {error_msg}")
+            return
+
+        # ИСПРАВЛЕНИЕ: берём [0], потому что choices — это список
+        reply = result['choices'][0]['message']['content'].strip()
+
+        # Сохраняем в историю
+        chat_history[message.chat.id].append((user_text, reply))
+
+        bot.reply_to(message, reply)
+
+    except requests.exceptions.Timeout:
+        bot.reply_to(message, "Ой, сервер задумался… Попробуй ещё разок! 🔥")
+    except json.JSONDecodeError:
+        bot.reply_to(message, "У меня тут что-то с сетью… Давай чуть позже! 💋")
+    except Exception as e:
+        # Ловим все остальные ошибки, чтобы бот не падал
+        print(f"Unexpected error: {e}")
+        bot.reply_to(message, "Кажется, у меня интернет шалит… Попробуй ещё разок! 😈")
+
 if __name__ == "__main__":
-    print("Эмма в стиле Crushon запущена!")
+    print("Эмма запущена!")
     bot.infinity_polling()
