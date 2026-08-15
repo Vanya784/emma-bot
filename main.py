@@ -30,7 +30,7 @@ def handle_tg_message(message):
         user_text = message.text.replace(f"@{bot.get_me().username}", "").strip()
         
         payload = {
-            "model": "gryphe/mythomax-l2-13b:free",
+            "model": "meta-llama/llama-3-8b-instruct:free",
             "messages": [
                 {"role": "system", "content": PROMPT},
                 {"role": "user", "content": user_text}
